@@ -1,0 +1,194 @@
+package org.unlaxer.tinyexpression.ide;
+
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import com.google.gson.Gson;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+
+import jakarta.servlet.http.HttpServlet;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+
+/**
+ * REST endpoint: POST /api/eval
+ * <p>
+ * Request body (JSON):
+ * <pre>
+ * {
+ *   "formula": "1 + $x * 2",
+ *   "variables": { "x": "10" },
+ *   "resultType": "number"   // optional: number | string | boolean
+ * }
+ * </pre>
+ * <p>
+ * Response (JSON):
+ * <pre>
+ * {
+ *   "result": "21",
+ *   "error": null,
+ *   "ast": "(root (add 1 (mul $x 2)))"
+ * }
+ * </pre>
+ * <p>
+ * Evaluation is sandboxed with a 5-second timeout to guard against
+ * runaway expressions.
+ */
+public class EvalEndpoint extends HttpServlet {
+
+    private static final Logger LOG = Logger.getLogger(EvalEndpoint.class.getName());
+    private static final Gson GSON = new Gson();
+    private static final long EVAL_TIMEOUT_SECONDS = 5;
+
+    private final ExecutorService evalPool = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "eval-worker");
+        t.setDaemon(true);
+        return t;
+    });
+
+    @Override
+    protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        resp.setContentType("application/json; charset=UTF-8");
+        resp.setHeader("Access-Control-Allow-Origin", "*");
+
+        // Read request body
+        StringBuilder body = new StringBuilder();
+        try (BufferedReader reader = req.getReader()) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                body.append(line);
+            }
+        }
+
+        JsonObject result = new JsonObject();
+
+        try {
+            JsonObject request = GSON.fromJson(body.toString(), JsonObject.class);
+            String formula = getStringOrNull(request, "formula");
+            if (formula == null || formula.isBlank()) {
+                result.addProperty("error", "Missing 'formula' field");
+                writeJson(resp, 400, result);
+                return;
+            }
+
+            String resultType = getStringOrNull(request, "resultType");
+            if (resultType == null) resultType = "number";
+
+            // Extract variables
+            Map<String, String> variables = new LinkedHashMap<>();
+            if (request.has("variables") && request.get("variables").isJsonObject()) {
+                JsonObject vars = request.getAsJsonObject("variables");
+                for (Map.Entry<String, JsonElement> entry : vars.entrySet()) {
+                    variables.put(entry.getKey(), entry.getValue().getAsString());
+                }
+            }
+
+            // Evaluate with timeout
+            final String fFormula = formula;
+            final String fResultType = resultType;
+            final Map<String, String> fVariables = variables;
+
+            Future<JsonObject> future = evalPool.submit(() -> evaluate(fFormula, fVariables, fResultType));
+
+            try {
+                JsonObject evalResult = future.get(EVAL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                writeJson(resp, 200, evalResult);
+                return;
+            } catch (TimeoutException e) {
+                future.cancel(true);
+                result.addProperty("error", "Evaluation timed out after " + EVAL_TIMEOUT_SECONDS + " seconds");
+                result.addProperty("result", (String) null);
+            } catch (ExecutionException e) {
+                result.addProperty("error", "Evaluation error: " + e.getCause().getMessage());
+                result.addProperty("result", (String) null);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                result.addProperty("error", "Evaluation interrupted");
+                result.addProperty("result", (String) null);
+            }
+
+        } catch (Exception e) {
+            LOG.log(Level.WARNING, "Eval request failed", e);
+            result.addProperty("error", "Invalid request: " + e.getMessage());
+        }
+
+        writeJson(resp, 200, result);
+    }
+
+    @Override
+    protected void doOptions(HttpServletRequest req, HttpServletResponse resp) {
+        resp.setHeader("Access-Control-Allow-Origin", "*");
+        resp.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+        resp.setHeader("Access-Control-Allow-Headers", "Content-Type");
+        resp.setStatus(204);
+    }
+
+    /**
+     * Evaluate a TinyExpression formula.
+     * <p>
+     * This is a simplified evaluator for the MVP. It parses the formula,
+     * substitutes variables, and returns the result.
+     * <p>
+     * TODO: Replace with full AstEvaluatorCalculator integration when
+     * tinyexpression is available as a dependency.
+     */
+    private JsonObject evaluate(String formula, Map<String, String> variables, String resultType) {
+        JsonObject result = new JsonObject();
+
+        try {
+            // Substitute variables into formula for simple evaluation
+            String substituted = formula;
+            for (Map.Entry<String, String> entry : variables.entrySet()) {
+                String varName = entry.getKey();
+                String varValue = entry.getValue();
+                // Replace $varName with value
+                substituted = substituted.replace("$" + varName, varValue);
+            }
+
+            // Attempt simple arithmetic evaluation for MVP
+            // This covers basic expressions; full evaluation requires tinyexpression lib
+            Object evalResult = SimpleExpressionEvaluator.evaluate(substituted);
+
+            result.addProperty("result", String.valueOf(evalResult));
+            result.addProperty("error", (String) null);
+            result.addProperty("formula", formula);
+            result.addProperty("substituted", substituted);
+
+        } catch (Exception e) {
+            result.addProperty("result", (String) null);
+            result.addProperty("error", e.getMessage());
+            result.addProperty("formula", formula);
+        }
+
+        return result;
+    }
+
+    private static String getStringOrNull(JsonObject obj, String key) {
+        if (obj.has(key) && !obj.get(key).isJsonNull()) {
+            return obj.get(key).getAsString();
+        }
+        return null;
+    }
+
+    private static void writeJson(HttpServletResponse resp, int status, JsonObject json) throws IOException {
+        resp.setStatus(status);
+        try (PrintWriter out = resp.getWriter()) {
+            out.print(GSON.toJson(json));
+            out.flush();
+        }
+    }
+}
