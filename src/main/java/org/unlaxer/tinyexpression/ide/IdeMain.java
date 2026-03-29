@@ -65,22 +65,25 @@ public class IdeMain {
         resourceHandler.setDirectoriesListed(false);
         resourceHandler.setWelcomeFiles(new String[]{"index.html"});
 
-        // Resolve static resources from classpath
-        URL staticDir = IdeMain.class.getClassLoader().getResource("static");
-        if (staticDir != null) {
-            resourceHandler.setResourceBase(staticDir.toExternalForm());
-            LOG.info("Serving static files from: " + staticDir);
+        // Resolve static resources — try filesystem first (dev mode), then classpath
+        java.io.File devDir = new java.io.File("src/main/resources/static");
+        if (devDir.isDirectory()) {
+            resourceHandler.setResourceBase(devDir.getAbsolutePath());
+            LOG.info("Serving static files from: " + devDir.getAbsolutePath());
         } else {
-            // Fallback: serve from filesystem (development mode)
-            String devPath = "src/main/resources/static";
-            resourceHandler.setResourceBase(devPath);
-            LOG.info("Serving static files from: " + devPath);
+            URL staticDir = IdeMain.class.getClassLoader().getResource("static");
+            if (staticDir != null) {
+                resourceHandler.setResourceBase(staticDir.toExternalForm());
+                LOG.info("Serving static files from: " + staticDir);
+            } else {
+                LOG.warning("No static resources found!");
+            }
         }
 
-        // Combine handlers: servlet context first (API + WS), then static files
+        // Combine handlers: static files first, then servlet context (API + WS)
         HandlerList handlers = new HandlerList();
-        handlers.addHandler(context);
         handlers.addHandler(resourceHandler);
+        handlers.addHandler(context);
 
         server.setHandler(handlers);
 
