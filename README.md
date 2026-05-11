@@ -13,19 +13,21 @@ Web-based IDE for TinyExpression formulas, built with Monaco Editor and LSP over
 
 ## Architecture
 
-```
-Browser (Monaco + LSP client)
-    |
-    |  WebSocket (JSON-RPC)        POST /api/eval
-    |                              |
-    v                              v
-Jetty Server (port 8080)
-    |                              |
-    v                              v
-WebSocketLspBridge          EvalEndpoint
-    |                              |
-    v                              v
-StubLspServer*             SimpleExpressionEvaluator
+```mermaid
+flowchart TD
+    Browser["Browser (Monaco + LSP client)"]
+    Jetty["Jetty Server (port 8080)"]
+    Bridge[WebSocketLspBridge]
+    Eval[EvalEndpoint]
+    Stub["StubLspServer*"]
+    Simple[SimpleExpressionEvaluator]
+
+    Browser -- "WebSocket (JSON-RPC)" --> Jetty
+    Browser -- "POST /api/eval" --> Jetty
+    Jetty --> Bridge
+    Jetty --> Eval
+    Bridge --> Stub
+    Eval --> Simple
 ```
 
 *The StubLspServer will be replaced by TinyExpressionP4LanguageServerExt once wired as a dependency.
