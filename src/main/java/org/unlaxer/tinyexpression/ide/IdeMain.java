@@ -31,7 +31,15 @@ public class IdeMain {
 
     public static void main(String[] args) throws Exception {
         int port = DEFAULT_PORT;
-        if (args.length > 0) {
+        // PORT env var takes precedence (volta/gateway convention), then args[0], then default
+        String envPort = System.getenv("PORT");
+        if (envPort != null && !envPort.isBlank()) {
+            try {
+                port = Integer.parseInt(envPort.trim());
+            } catch (NumberFormatException e) {
+                System.err.println("Invalid PORT env: " + envPort + ", trying args/default");
+            }
+        } else if (args.length > 0) {
             try {
                 port = Integer.parseInt(args[0]);
             } catch (NumberFormatException e) {
@@ -52,6 +60,12 @@ public class IdeMain {
 
         // Register eval REST endpoint
         context.addServlet(new ServletHolder("eval", new EvalEndpoint()), "/api/eval");
+
+        // Register health check endpoint (for volta gateway)
+        context.addServlet(new ServletHolder("healthz", new HealthEndpoint()), "/healthz");
+
+        // Register MCP endpoint (Streamable HTTP for volta-mcp facade)
+        context.addServlet(new ServletHolder("mcp", new McpEndpoint()), "/mcp");
 
         // Register WebSocket endpoint via servlet
         JettyWebSocketServletContainerInitializer.configure(context,
@@ -88,10 +102,12 @@ public class IdeMain {
         server.setHandler(handlers);
 
         server.start();
-        LOG.info("TinyExpression IDE started on http://localhost:" + port);
+        LOG.info("TinyExpression IDE started on http://0.0.0.0:" + port);
         LOG.info("  Editor:    http://localhost:" + port + "/");
         LOG.info("  LSP:       ws://localhost:" + port + "/lsp");
         LOG.info("  Eval API:  http://localhost:" + port + "/api/eval");
+        LOG.info("  Health:    http://localhost:" + port + "/healthz");
+        LOG.info("  MCP:        http://localhost:" + port + "/mcp");
         server.join();
     }
 }
