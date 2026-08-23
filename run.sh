@@ -1,31 +1,20 @@
 #!/bin/sh
 # TinyExpression IDE — startup script for systemd
-# Builds classpath from local Maven repo + compiled classes
+# Uses Maven-generated classpath for all runtime dependencies
 set -e
+
+JAVA_HOME="/home/opa/.sdkman/candidates/java/21.0.9-oracle"
+JAVA="$JAVA_HOME/bin/java"
+MAVEN_HOME="/home/opa/.sdkman/candidates/maven/3.9.9"
+MAVEN="$MAVEN_HOME/bin/mvn"
 
 HOME_DIR="/home/opa/tinyexpression-ide"
 cd "$HOME_DIR"
 
-# Build classpath: compiled classes + Maven dependency jars
-CP="target/classes"
-MAVEN_REPO="/home/opa/.m2/repository"
+# Generate classpath from Maven (runtime scope only)
+CP_FILE="$HOME_DIR/target/classpath.txt"
+"$MAVEN" -q dependency:build-classpath -DincludeScope=runtime -Dmdep.outputFile="$CP_FILE" -f "$HOME_DIR/pom.xml" 2>/dev/null
 
-# Collect all runtime dependency JARs from local Maven repo
-for jar in \
-  "$MAVEN_REPO/org/unlaxer/unlaxer-common/2.8.0/unlaxer-common-2.8.0.jar" \
-  "$MAVEN_REPO/org/unlaxer/unlaxer-dsl/2.8.0/unlaxer-dsl-2.8.0.jar" \
-  "$MAVEN_REPO/org/eclipse/lsp4j/org.eclipse.lsp4j/0.23.1/org.eclipse.lsp4j-0.23.1.jar" \
-  "$MAVEN_REPO/org/eclipse/lsp4j/org.eclipse.lsp4j.jsonrpc/0.23.1/org.eclipse.lsp4j.jsonrpc-0.23.1.jar" \
-  "$MAVEN_REPO/org/eclipse/jetty/jetty-server/11.0.20/jetty-server-11.0.20.jar" \
-  "$MAVEN_REPO/org/eclipse/jetty/jetty-servlet/11.0.20/jetty-servlet-11.0.20.jar" \
-  "$MAVEN_REPO/org/eclipse/jetty/websocket/websocket-jetty-server/11.0.20/websocket-jetty-server-11.0.20.jar" \
-  "$MAVEN_REPO/org/eclipse/jetty/websocket/websocket-jetty-api/11.0.20/websocket-jetty-api-11.0.20.jar" \
-  "$MAVEN_REPO/org/eclipse/jetty/websocket/websocket-servlet/11.0.20/websocket-servlet-11.0.20.jar" \
-  "$MAVEN_REPO/com/google/code/gson/gson/2.10.1/gson-2.10.1.jar" \
-  "$MAVEN_REPO/org/slf4j/slf4j-simple/2.0.9/slf4j-simple-2.0.9.jar"; do
-  if [ -f "$jar" ]; then
-    CP="$CP:$jar"
-  fi
-done
+CP="target/classes:$(cat "$CP_FILE")"
 
-exec java -cp "$CP" org.unlaxer.tinyexpression.ide.IdeMain
+exec "$JAVA" -Xmx512m -XX:+ExitOnOutOfMemoryError -cp "$CP" org.unlaxer.tinyexpression.ide.IdeMain
