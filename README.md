@@ -117,3 +117,31 @@ src/main/resources/static/
 4. FormulaInfo metadata form editor
 5. Dependency graph visualization (D3.js)
 6. Electron/Tauri desktop packaging
+
+## MCP
+
+This server is an MCP (Model Context Protocol) backend for the volta facade.
+
+- **Namespace**: `tinyexpression-ide`
+- **Tools**: `evaluate`, `validate` (see `tinyexpression-ide://spec` for details)
+- **Resources**: `tinyexpression-ide://spec`, `tinyexpression-ide://guide`, `skill://formula-eval-workflow`
+- **Health**: `GET /healthz`
+- **MCP endpoint**: `POST /mcp` (Streamable HTTP, JSON-RPC 2.0)
+
+### Run with MCP
+
+```bash
+PORT=9264 java -cp ... org.unlaxer.tinyexpression.ide.IdeMain
+```
+
+The server listens on `0.0.0.0:$PORT` and serves:
+- `/` — Monaco Editor IDE
+- `/api/eval` — REST evaluation API
+- `/lsp` — WebSocket LSP
+- `/healthz` — health check (200 `{ok, name, version}`)
+- `/mcp` — MCP Streamable HTTP endpoint
+
+### volta participation
+
+Registered as `tinyexpression-ide` in volta with hostname `expr.unlaxer.org`, port 9264.
+See `volta.service.json` and `docs/mcp/DESIGN.md` for details.

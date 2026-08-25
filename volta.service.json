@@ -1,0 +1,26 @@
+{
+  "id": "tinyexpression-ide",
+  "name": "TinyExpression IDE",
+  "description": "TinyExpression 式の評価・検証 MCP（MVP 簡易評価器）",
+  "type": "java",
+  "hostname": "expr.unlaxer.org",
+  "port": 9264,
+  "host": "192.168.1.50",
+  "runtime": "systemd",
+  "exec_start": "/home/opa/tinyexpression-ide/run.sh",
+  "user": "opa",
+  "auth": "minRole:MEMBER",
+  "health_check": "/healthz",
+  "icon": "si-openjdk",
+  "tags": ["mcp", "tinyexpression", "ide", "evaluator", "opa"],
+  "repo_url": "https://github.com/opaopa6969/unlaxer-workspace",
+  "mcp": {
+    "enabled": true,
+    "port": 9264,
+    "path": "/mcp",
+    "namespace": "tinyexpression-ide",
+    "min_role": "MEMBER",
+    "timeoutMs": 110000,
+    "description": "TinyExpression 式の評価・検証（MVP 簡易版）"
+  }
+}

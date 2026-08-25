@@ -1,0 +1,104 @@
+{
+  "repo": "tinyexpression-ide",
+  "surveyed_at": "2026-08-22T08:46:35+09:00",
+  "kind": "service",
+  "summary": "TinyExpression 式をブラウザ上で編集・評価・診断する Web IDE。Jetty 上で Monaco Editor 静的配信、LSP over WebSocket、POST /api/eval 評価 API を提供する。現状は StubLspServer と簡易評価器（SimpleExpressionEvaluator）の MVP で、本命の TinyExpressionP4LanguageServerExt / AstEvaluatorCalculator は未接続。volta カタログ上は operational_status=retired、hosted_url=expr.unlaxer.org だが MCP バックエンドなし。",
+  "decision": "wrap",
+  "decision_reason": "既に Jetty HTTP サーバが常駐し POST /api/eval と WebSocket /lsp を持つため、MCP 化は既存 API を薄く包む wrap が最適。新規サーバプロセスは不要（既に常駐）、healthz と PORT 環境変数と volta.service.json だけ追加すれば volta に参加できる。ただし評価器が MVP 簡易版で本命ランタイム未接続、テスト0件、operational_status=retired であり、本格 MCP 公開の前にランタイム接続と安定化が前提。MCP 化の価値はエージェントが TinyExpression 式を評価・診断できる tool にあり、他サービス（tinyexpression ライブラリ等）との協調の核になる。",
+  "existing": {
+    "http_api": true,
+    "cli": false,
+    "mcp": false,
+    "healthz": false,
+    "volta_manifest": false,
+    "hosted_url": "https://expr.unlaxer.org"
+  },
+  "proposed_namespace": "tinyexpression-ide",
+  "capabilities": [
+    {
+      "verb": "TinyExpression 式を評価する",
+      "kind": "tool",
+      "name": "evaluate",
+      "io": "{formula: string, variables: {key: string}, resultType?: string} → {result, error, formula, substituted}",
+      "side_effect": "read",
+      "long_running": false,
+      "maps_to": "src/main/java/org/unlaxer/tinyexpression/ide/EvalEndpoint.java:doPost() — POST /api/eval を薄く包む"
+    },
+    {
+      "verb": "TinyExpression 式を診断する（補完・エラー・hover）",
+      "kind": "tool",
+      "name": "diagnose",
+      "io": "{text: string} → {diagnostics: [{range, severity, message}], completions: [string]}",
+      "side_effect": "read",
+      "long_running": false,
+      "maps_to": "src/main/java/org/unlaxer/tinyexpression/ide/StubLspServer.java — WebSocket /lsp の LSP メッセージを stdio bridge 経由で薄く包む"
+    },
+    {
+      "verb": "評価APIの仕様",
+      "kind": "resource",
+      "name": "spec",
+      "uri": "tinyexpression-ide://spec"
+    },
+    {
+      "verb": "IDEの使い方",
+      "kind": "resource",
+      "name": "guide",
+      "uri": "tinyexpression-ide://guide"
+    },
+    {
+      "verb": "式の変数自動検出と評価の組み立て方",
+      "kind": "skill",
+      "name": "formula-eval-workflow",
+      "locality": "repo"
+    }
+  ],
+  "composition_examples": [
+    "tinyexpression-ide__evaluate → apbu__validate で式の評価結果を JSON Schema で検証する",
+    "データパイプラインが tinyexpression-ide__evaluate で式を評価し、結果を nanori__parse に流す",
+    "tinyexpression-ide__diagnose で式の構文エラーを検出し、volta_skill__resolve で修正手順を得る"
+  ],
+  "dependencies": [
+    {
+      "repo": "tinyexpression",
+      "direction": "depends_on",
+      "capability": "AstEvaluatorCalculator / TinyExpressionP4LanguageServerExt（本命評価器・LSP。現状は MVP 簡易版で未接続）",
+      "exists_now": false,
+      "note": "pom.xml で unlaxer-common / unlaxer-dsl 2.8.0 に依存。本命ランタイム接続は README Roadmap #1/#2 だが未着手。tinyexpression リポジトリ自体は volta カタログに library として登録済みだが MCP バックエンドなし"
+    },
+    {
+      "repo": "unlaxer-parser",
+      "direction": "depends_on",
+      "capability": "TinyExpression 文法のパーサ・AST 生成基盤（unlaxer-dsl 経由で間接依存）",
+      "exists_now": false,
+      "note": "volta カタログに library として登録済み、MCP バックエンドなし"
+    },
+    {
+      "repo": "tinyexpression",
+      "direction": "provides_to",
+      "capability": "式評価 tool（evaluate）と診断 tool（diagnose）。tinyexpression ライブラリがサーバ化された場合、評価能力はそちらに寄せるべき",
+      "exists_now": false,
+      "note": "tinyexpression はライブラリであり MCP サーバを持たない。将来 tinyexpression が library-serve で MCP 化されれば、評価 tool はそちらに統合し、IDE 側は診断/UI に特化するのが自然"
+    }
+  ],
+  "library_serve": {
+    "needed": false,
+    "new_work": [],
+    "runtime": "java",
+    "estimated_effort": "S"
+  },
+  "risks": [
+    "評価器が MVP 簡易版（SimpleExpressionEvaluator）で四則演算のみ。本命 TinyExpression の式（if/match/string/boolean 等）を評価できないため、MCP tool として公開するとエージェントが誤解する恐れがある。tool description に「MVP 簡易版・本命未接続」を明記すべき",
+    "operational_status=retired で expr.unlaxer.org は稼働していない。MCP 公開前に稼働状態を復旧する必要がある",
+    "テスト0件・CI なし（issue #007）。MCP tool の品質保証が弱い",
+    "CORS は環境変数 TINYEXP_ALLOWED_ORIGINS で制御可能だが、MCP ファサードは LAN 越しにアクセスするため、bind=0.0.0.0 と CORS 許可が必要",
+    "5秒の評価タイムアウトあり。現状は長時間処理なし（job 型不要）",
+    "外部 API 課金・秘密情報はなし（ローカル評価のみ）"
+  ],
+  "open_questions": [
+    "operational_status=retired だが、MCP 化して再稼働させる予定はあるか？（持ち主確認）",
+    "本命 TinyExpressionP4LanguageServerExt / AstEvaluatorCalculator の接続時期は？（MCP tool の価値がこれに依存する）",
+    "将来 tinyexpression ライブラリ自体が MCP サーバ化（library-serve）された場合、評価 tool はそちらに寄せるか？IDE 側は診断/UI に特化するか？",
+    "resultType パラメータの仕様が未確定（issue #003）。MCP tool の入力スキーマに含めるか？（持ち主確認）",
+    "非文字列の変数値の扱いが未確定（issue #005）。MCP tool で variables を文字列のみに制限するか？（持ち主確認）"
+  ]
+}

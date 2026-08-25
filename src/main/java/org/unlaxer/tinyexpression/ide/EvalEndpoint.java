@@ -6,11 +6,11 @@ import java.io.PrintWriter;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.Callable;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.logging.Level;
@@ -41,7 +41,8 @@ import jakarta.servlet.http.HttpServletResponse;
  * {
  *   "result": "21",
  *   "error": null,
- *   "ast": "(root (add 1 (mul $x 2)))"
+ *   "formula": "1 + $x * 2",
+ *   "substituted": "1 + 10 * 2"
  * }
  * </pre>
  * <p>
@@ -53,24 +54,51 @@ public class EvalEndpoint extends HttpServlet {
     private static final Logger LOG = Logger.getLogger(EvalEndpoint.class.getName());
     private static final Gson GSON = new Gson();
     private static final long EVAL_TIMEOUT_SECONDS = 5;
+    private static final int EVAL_POOL_SIZE = 8;
+    private static final int EVAL_QUEUE_CAPACITY = 64;
 
-    private final ExecutorService evalPool = Executors.newCachedThreadPool(r -> {
-        Thread t = new Thread(r, "eval-worker");
-        t.setDaemon(true);
-        return t;
-    });
+    /** Comma-separated allowed CORS origins via env TINYEXP_ALLOWED_ORIGINS.
+     *  Empty/unset → "*" (backward-compatible; intended for local same-origin IDE). */
+    private static final java.util.Set<String> ALLOWED_ORIGINS = parseAllowedOrigins(
+        System.getenv("TINYEXP_ALLOWED_ORIGINS"));
+
+    private static java.util.Set<String> parseAllowedOrigins(String raw) {
+        if (raw == null || raw.isBlank()) return null; // null sentinel → emit "*"
+        java.util.Set<String> set = new java.util.HashSet<>();
+        for (String o : raw.split(",")) {
+            String t = o.trim();
+            if (!t.isEmpty()) set.add(t);
+        }
+        return set.isEmpty() ? null : set;
+    }
+
+    private static String corsHeaderFor(String origin) {
+        if (ALLOWED_ORIGINS == null) return "*";
+        if (origin != null && ALLOWED_ORIGINS.contains(origin)) return origin;
+        return "null"; // RFC 6454: deny cross-origin by returning opaque origin
+    }
+
+    private final ExecutorService evalPool = new ThreadPoolExecutor(
+        EVAL_POOL_SIZE, EVAL_POOL_SIZE,
+        60L, TimeUnit.SECONDS,
+        new ArrayBlockingQueue<>(EVAL_QUEUE_CAPACITY),
+        r -> { Thread t = new Thread(r, "eval-worker"); t.setDaemon(true); return t; },
+        new ThreadPoolExecutor.CallerRunsPolicy());
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {
         resp.setContentType("application/json; charset=UTF-8");
-        resp.setHeader("Access-Control-Allow-Origin", "*");
+        resp.setHeader("Access-Control-Allow-Origin", corsHeaderFor(req.getHeader("Origin")));
 
-        // Read request body
+        // Read request body preserving newlines (readLine() strips line endings)
         StringBuilder body = new StringBuilder();
         try (BufferedReader reader = req.getReader()) {
             String line;
+            boolean first = true;
             while ((line = reader.readLine()) != null) {
+                if (!first) body.append('\n');
                 body.append(line);
+                first = false;
             }
         }
 
@@ -113,7 +141,8 @@ public class EvalEndpoint extends HttpServlet {
                 result.addProperty("error", "Evaluation timed out after " + EVAL_TIMEOUT_SECONDS + " seconds");
                 result.addProperty("result", (String) null);
             } catch (ExecutionException e) {
-                result.addProperty("error", "Evaluation error: " + e.getCause().getMessage());
+                Throwable cause = e.getCause() != null ? e.getCause() : e;
+                result.addProperty("error", "Evaluation error: " + cause.getMessage());
                 result.addProperty("result", (String) null);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -131,7 +160,7 @@ public class EvalEndpoint extends HttpServlet {
 
     @Override
     protected void doOptions(HttpServletRequest req, HttpServletResponse resp) {
-        resp.setHeader("Access-Control-Allow-Origin", "*");
+        resp.setHeader("Access-Control-Allow-Origin", corsHeaderFor(req.getHeader("Origin")));
         resp.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
         resp.setHeader("Access-Control-Allow-Headers", "Content-Type");
         resp.setStatus(204);
@@ -155,8 +184,12 @@ public class EvalEndpoint extends HttpServlet {
             for (Map.Entry<String, String> entry : variables.entrySet()) {
                 String varName = entry.getKey();
                 String varValue = entry.getValue();
-                // Replace $varName with value
-                substituted = substituted.replace("$" + varName, varValue);
+                // Replace $varName only at token boundary to avoid partial-match bugs
+                // (e.g. $x must not match inside $xy). Variable names follow Java
+                // identifier pattern; the boundary is the first non-identifier char.
+                substituted = substituted.replaceAll(
+                    "\\$" + java.util.regex.Pattern.quote(varName) + "(?![A-Za-z0-9_])",
+                    java.util.regex.Matcher.quoteReplacement(varValue));
             }
 
             // Attempt simple arithmetic evaluation for MVP

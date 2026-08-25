@@ -1,0 +1,16 @@
+[Unit]
+Description=TinyExpression IDE — MCP backend (Jetty)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/tinyexpression-ide
+Environment=PORT=9264
+Environment=TINYEXP_ALLOWED_ORIGINS=https://expr.unlaxer.org
+EnvironmentFile=-/home/opa/volta-secrets/tinyexpression-ide.env
+ExecStart=/home/opa/tinyexpression-ide/run.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
