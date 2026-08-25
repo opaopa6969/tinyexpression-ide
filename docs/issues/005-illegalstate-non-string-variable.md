@@ -24,3 +24,13 @@ variables.put(entry.getKey(), entry.getValue().getAsString());
 
 ## 重複・推測チェック
 - 行番号根拠あり、事実。重複なし。
+
+---
+
+kind: contract
+loop: contract-drift
+priority: medium
+depends_on: []
+acceptance:
+  - 変数値の型取り扱い（文字列強制 or JSON 型維持）が仕様判断で確定すること（人間ゲート）
+  - 確定した仕様に従い、非文字列値で `IllegalStateException` が発生しないこと、または spec が文字列のみに制限されること

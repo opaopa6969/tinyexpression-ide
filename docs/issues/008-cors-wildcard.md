@@ -23,3 +23,14 @@ resp.setHeader("Access-Control-Allow-Origin", "*");
 
 ## 重複・推測チェック
 - 行番号根拠あり、事実。重複なし。
+
+---
+
+kind: security
+loop: issue-fix
+priority: low
+depends_on: []
+acceptance:
+  - 環境変数 `TINYEXP_ALLOWED_ORIGINS` で許可 origin を指定可能であること
+  - 未設定時は後方互換で `*` になること
+  - 設定時は Origin ヘッダと照合し、許可リストに無ければ拒否されること

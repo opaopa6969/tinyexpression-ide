@@ -24,3 +24,14 @@
 ## 重複・推測チェック
 - 根拠あり、事実。重複なし。
 - READMEロードマップとの重複: ロードマップ#1/#2（実ランタイム接続）の「前提」としては言及可能だが、テスト不在自体は独立した問題。
+
+---
+
+kind: test
+loop: test-gap
+priority: medium
+depends_on: []
+acceptance:
+  - テスト範囲（最小限/網羅的）とCI実行環境（OS・JDK・キャッシュ）が判断確定すること（人間ゲート）
+  - `SimpleExpressionEvaluator` の単体テストと `EvalEndpoint` の結合テストが追加されること
+  - CI で `mvn test` が実行されること

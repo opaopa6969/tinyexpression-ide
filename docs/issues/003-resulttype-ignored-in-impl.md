@@ -22,3 +22,13 @@
 ## 重複・推測チェック
 - 行番号根拠あり、事実。重複なし。
 - ただし「仕様側も未確定」のため、実装側のバグではなく仕様判断待ち。
+
+---
+
+kind: contract
+loop: contract-drift
+priority: medium
+depends_on: []
+acceptance:
+  - `resultType` の仕様が (A) 実装確定 / (B) 削除して400拒否 / (C) 現状維持明記 のいずれかで確定すること（人間ゲート）
+  - 確定した仕様に従い、spec-eval-api.md の TODO が解消され、EvalEndpoint 実装が spec と一致すること

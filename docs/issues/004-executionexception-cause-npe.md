@@ -26,3 +26,12 @@
 ## 重複・推測チェック
 - 行番号根拠あり、事実。重複なし。
 - cause=null が実際に発生する経路は未確認（推測を含む）だが、null チェック不足自体は事実。
+
+---
+
+kind: bug
+loop: issue-fix
+priority: medium
+depends_on: []
+acceptance:
+  - `ExecutionException.getCause()` が null でも NPE が発生せずエラーレスポンスが返されること

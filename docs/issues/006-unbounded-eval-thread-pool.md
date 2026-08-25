@@ -26,3 +26,13 @@ private final ExecutorService evalPool = Executors.newCachedThreadPool(r -> {
 
 ## 重複・推測チェック
 - 行番号根拠あり、事実。重複なし。
+
+---
+
+kind: bug
+loop: issue-fix
+priority: medium
+depends_on: []
+acceptance:
+  - 評価スレッドプールに上限（core=max=N, queue=容量）が設定されていること
+  - 飽和時にバックプレッシャー（CallerRunsPolicy 等）がかかること

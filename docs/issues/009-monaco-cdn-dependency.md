@@ -27,3 +27,13 @@ Monaco Editor の loader と editor.main を cdnjs から読み込んでいる�
 
 ## 重複・推測チェック
 - 行番号根拠あり、事実。重複なし。
+
+---
+
+kind: architecture
+loop: architecture-decision
+priority: low
+depends_on: []
+acceptance:
+  - Monaco のバンドル方針（ローカル配置 or npm ビルド手順）が判断確定すること（人間ゲート）
+  - CDN 依存が解消され、オフライン/外部CDN不通環境でもエディタが動作すること

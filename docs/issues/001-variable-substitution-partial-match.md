@@ -27,3 +27,14 @@ substituted = substituted.replace("$" + varName, varValue);
 
 ## 重複・推測チェック
 - 行番号根拠あり、事実。重複なし。
+
+---
+
+kind: bug
+loop: issue-fix
+priority: high
+depends_on: []
+acceptance:
+  - 変数参照 `$varName` が前方一致する別変数（`$xy` vs `$x`）に誤置換されないこと
+  - 変数名の境界が非識別子文字（空白/演算子/括弧/行末）で区切られること
+  - 変数値に正規表現メタ文字が含まれても置換が安全であること

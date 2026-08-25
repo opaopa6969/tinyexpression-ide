@@ -33,3 +33,13 @@ try (BufferedReader reader = req.getReader()) {
 
 ## 重複・推測チェック
 - 行番号根拠あり、事実。重複なし。
+
+---
+
+kind: bug
+loop: issue-fix
+priority: high
+depends_on: []
+acceptance:
+  - リクエストボディの複数行式の改行が保持されること（`line1\nline2` が一行に圧縮されないこと）
+  - `formula` の複数行許容について spec 側への追記判断が確定すること（人間ゲート）
