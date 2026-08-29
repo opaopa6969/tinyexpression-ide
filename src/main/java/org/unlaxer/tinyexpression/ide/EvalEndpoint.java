@@ -178,20 +178,12 @@ public class EvalEndpoint extends HttpServlet {
     private JsonObject evaluate(String formula, Map<String, String> variables, String resultType) {
         JsonObject result = new JsonObject();
 
-        try {
-            // Substitute variables into formula for simple evaluation
-            String substituted = formula;
-            for (Map.Entry<String, String> entry : variables.entrySet()) {
-                String varName = entry.getKey();
-                String varValue = entry.getValue();
-                // Replace $varName only at token boundary to avoid partial-match bugs
-                // (e.g. $x must not match inside $xy). Variable names follow Java
-                // identifier pattern; the boundary is the first non-identifier char.
-                substituted = substituted.replaceAll(
-                    "\\$" + java.util.regex.Pattern.quote(varName) + "(?![A-Za-z0-9_])",
-                    java.util.regex.Matcher.quoteReplacement(varValue));
-            }
+        // Single-pass variable substitution: each $varName token is replaced
+        // exactly once with its literal value, so values containing $-tokens
+        // are not re-interpreted in a later pass (no double substitution).
+        String substituted = VariableSubstituter.substitute(formula, variables);
 
+        try {
             // Attempt simple arithmetic evaluation for MVP
             // This covers basic expressions; full evaluation requires tinyexpression lib
             Object evalResult = SimpleExpressionEvaluator.evaluate(substituted);
@@ -205,6 +197,7 @@ public class EvalEndpoint extends HttpServlet {
             result.addProperty("result", (String) null);
             result.addProperty("error", e.getMessage());
             result.addProperty("formula", formula);
+            result.addProperty("substituted", substituted);
         }
 
         return result;

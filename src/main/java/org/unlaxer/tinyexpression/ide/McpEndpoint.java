@@ -62,7 +62,7 @@ public class McpEndpoint extends HttpServlet {
         try {
             switch (method == null ? "" : method) {
                 case "initialize":
-                    result = handleInitialize(req, request);
+                    result = handleInitialize(req, resp, request);
                     break;
                 case "notifications/initialized":
                     result = null;
@@ -98,7 +98,12 @@ public class McpEndpoint extends HttpServlet {
 
         resp.setStatus(status);
         try (PrintWriter out = resp.getWriter()) {
-            out.print(GSON.toJson(result));
+            // Use GSON_WITH_NULLS so that a JSON-RPC envelope carrying id: null
+            // (a valid diagnostic id per JSON-RPC 2.0 §4.2) is serialized with the
+            // "id" member present, instead of having it stripped by the default
+            // serializeNulls=false behaviour. Other envelope members are never
+            // set to null, so this only affects the id field.
+            out.print(GSON_WITH_NULLS.toJson(result));
             out.flush();
         }
     }
@@ -110,7 +115,7 @@ public class McpEndpoint extends HttpServlet {
         resp.setStatus(405);
         JsonObject err = makeError("null", -32600, "GET not supported. Use POST for JSON-RPC.");
         try (PrintWriter out = resp.getWriter()) {
-            out.print(GSON.toJson(err));
+            out.print(GSON_WITH_NULLS.toJson(err));
             out.flush();
         }
     }
@@ -126,9 +131,13 @@ public class McpEndpoint extends HttpServlet {
 
     // --- JSON-RPC handlers ---
 
-    private JsonObject handleInitialize(HttpServletRequest req, JsonObject request) {
+    private JsonObject handleInitialize(HttpServletRequest req, HttpServletResponse resp, JsonObject request) {
         String sessionId = UUID.randomUUID().toString();
         sessions.put(sessionId, true);
+        // MCP Streamable HTTP: the server MUST return the session id via the
+        // mcp-session-id response header so the client can echo it on subsequent
+        // requests (and use it for DELETE to tear down the session).
+        resp.setHeader("mcp-session-id", sessionId);
 
         JsonObject result = new JsonObject();
         result.addProperty("jsonrpc", "2.0");
@@ -287,16 +296,12 @@ public class McpEndpoint extends HttpServlet {
             return wrapToolResult(evalResult);
         }
 
-        try {
-            String substituted = formula;
-            for (Map.Entry<String, String> entry : variables.entrySet()) {
-                String varName = entry.getKey();
-                String varValue = entry.getValue();
-                substituted = substituted.replaceAll(
-                        "\\$" + java.util.regex.Pattern.quote(varName) + "(?![A-Za-z0-9_])",
-                        java.util.regex.Matcher.quoteReplacement(varValue));
-            }
+        // Single-pass variable substitution: each $varName token is replaced
+        // exactly once with its literal value, so values containing $-tokens
+        // are not re-interpreted in a later pass (no double substitution).
+        String substituted = VariableSubstituter.substitute(formula, variables);
 
+        try {
             Object evalResultObj = SimpleExpressionEvaluator.evaluate(substituted);
             evalResult.addProperty("result", String.valueOf(evalResultObj));
             evalResult.addProperty("error", (String) null);
@@ -306,6 +311,7 @@ public class McpEndpoint extends HttpServlet {
             evalResult.addProperty("result", (String) null);
             evalResult.addProperty("error", e.getMessage());
             evalResult.addProperty("formula", formula);
+            evalResult.addProperty("substituted", substituted);
         }
 
         return wrapToolResult(evalResult);
