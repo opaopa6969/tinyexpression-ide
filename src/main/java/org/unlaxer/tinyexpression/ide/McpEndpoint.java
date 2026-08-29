@@ -41,6 +41,10 @@ public class McpEndpoint extends HttpServlet {
     static final String VERSION = "0.1.0";
     static final String PROTOCOL_VERSION = "2025-06-18";
 
+    /** Maximum accepted request body size in bytes. Larger bodies are rejected
+     *  with 413 before being fully buffered, to prevent unbounded memory use. */
+    static final int MAX_BODY_BYTES = 1024 * 1024;
+
     private final ConcurrentHashMap<String, Boolean> sessions = new ConcurrentHashMap<>();
 
     @Override
@@ -48,7 +52,18 @@ public class McpEndpoint extends HttpServlet {
         resp.setContentType("application/json; charset=UTF-8");
         resp.setHeader("Content-Encoding", "identity");
 
-        String body = readBody(req);
+        String body;
+        try {
+            body = readBody(req);
+        } catch (RequestBodyTooLargeException e) {
+            JsonObject err = makeError(null, -32603, "Request body too large (max " + MAX_BODY_BYTES + " bytes)");
+            resp.setStatus(413);
+            try (PrintWriter out = resp.getWriter()) {
+                out.print(GSON_WITH_NULLS.toJson(err));
+                out.flush();
+            }
+            return;
+        }
         JsonObject request = GSON.fromJson(body, JsonObject.class);
 
         String method = getStringOrNull(request, "method");
@@ -690,13 +705,21 @@ public class McpEndpoint extends HttpServlet {
         return null;
     }
 
-    private static String readBody(HttpServletRequest req) throws IOException {
+    private static String readBody(HttpServletRequest req) throws IOException, RequestBodyTooLargeException {
         StringBuilder sb = new StringBuilder();
+        int bytes = 0;
         try (BufferedReader reader = req.getReader()) {
             String line;
             boolean first = true;
             while ((line = reader.readLine()) != null) {
-                if (!first) sb.append('\n');
+                if (!first) {
+                    sb.append('\n');
+                    bytes++;
+                }
+                bytes += line.length();
+                if (bytes > MAX_BODY_BYTES) {
+                    throw new RequestBodyTooLargeException();
+                }
                 sb.append(line);
                 first = false;
             }

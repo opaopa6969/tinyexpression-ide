@@ -471,6 +471,106 @@ public class McpEndpointTest {
         assertEquals(7, resp.get("id").getAsInt());
     }
 
+    // --- request body size limit (security: unbounded-read DoS) ---
+
+    /**
+     * A request body larger than {@code MAX_BODY_BYTES} to /api/eval MUST be
+     * rejected with 413 before being buffered, to prevent unbounded memory
+     * use. Reproduces the fix for the unbounded-read DoS.
+     */
+    @Test
+    public void testEvalApiRejectsOversizedBody() throws Exception {
+        // Build a valid JSON envelope whose body is 1 byte over the limit.
+        // {"formula":"<padding>"} — pad the formula so the whole body exceeds MAX_BODY_BYTES.
+        int max = EvalEndpoint.MAX_BODY_BYTES;
+        String wrapper = "{\"formula\":\"";
+        String tail = "\"}";
+        int padLen = max - wrapper.length() - tail.length() + 1;
+        StringBuilder pad = new StringBuilder(padLen);
+        for (int i = 0; i < padLen; i++) pad.append('1');
+
+        HttpURLConnection conn = (HttpURLConnection) new URL(baseUrl + "/api/eval").openConnection();
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setDoOutput(true);
+        try (OutputStream os = conn.getOutputStream()) {
+            os.write((wrapper + pad + tail).getBytes(StandardCharsets.UTF_8));
+        }
+        assertEquals("oversized body must be rejected with 413",
+                413, conn.getResponseCode());
+        JsonObject resp = readResponse(conn);
+        assertTrue(resp.get("error").getAsString().contains("too large"));
+    }
+
+    /**
+     * A request body exactly at the limit (MAX_BODY_BYTES bytes of content,
+     * counting the newline readLine strips) must still be accepted — the
+     * limit is inclusive. Guards against an off-by-one that would reject a
+     * valid boundary request.
+     */
+    @Test
+    public void testEvalApiAcceptsBodyAtLimit() throws Exception {
+        int max = EvalEndpoint.MAX_BODY_BYTES;
+        // Construct a JSON body whose total byte length is exactly max.
+        // {"formula":"<padding>"} — adjust padding so the whole body == max bytes.
+        String wrapper = "{\"formula\":\"";
+        String tail = "\"}";
+        int padLen = max - wrapper.length() - tail.length();
+        assertTrue("test premise: limit must exceed wrapper overhead",
+                padLen > 0 && padLen < max);
+        StringBuilder pad = new StringBuilder(padLen);
+        for (int i = 0; i < padLen; i++) pad.append('1');
+        byte[] body = (wrapper + pad + tail).getBytes(StandardCharsets.UTF_8);
+        assertEquals("body must be exactly at the limit", max, body.length);
+
+        HttpURLConnection conn = (HttpURLConnection) new URL(baseUrl + "/api/eval").openConnection();
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setDoOutput(true);
+        try (OutputStream os = conn.getOutputStream()) {
+            os.write(body);
+        }
+        assertEquals("body at the limit must be accepted (limit is inclusive)",
+                200, conn.getResponseCode());
+        JsonObject resp = readResponse(conn);
+        // The formula is a huge run of 1s separated by nothing — not a valid
+        // expression, so we expect an evaluation error, not a 413.
+        assertFalse("at-limit body must not be rejected as too large",
+                resp.get("error").getAsString().contains("too large"));
+    }
+
+    /**
+     * Same as {@link #testEvalApiRejectsOversizedBody} but for the /mcp
+     * endpoint: a body larger than {@code MAX_BODY_BYTES} MUST be rejected
+     * with 413 and a JSON-RPC error envelope, not buffered.
+     */
+    @Test
+    public void testMcpRejectsOversizedBody() throws Exception {
+        int max = McpEndpoint.MAX_BODY_BYTES;
+        // Build a JSON-RPC tools/call with a huge formula argument.
+        String wrapper = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\","
+                + "\"params\":{\"name\":\"evaluate\",\"arguments\":{\"formula\":\"";
+        String tail = "\"}}}";
+        int padLen = max - wrapper.length() - tail.length() + 1;
+        StringBuilder pad = new StringBuilder(padLen);
+        for (int i = 0; i < padLen; i++) pad.append('1');
+
+        HttpURLConnection conn = (HttpURLConnection) new URL(baseUrl + "/mcp").openConnection();
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setDoOutput(true);
+        try (OutputStream os = conn.getOutputStream()) {
+            os.write((wrapper + pad + tail).getBytes(StandardCharsets.UTF_8));
+        }
+        assertEquals("oversized MCP body must be rejected with 413",
+                413, conn.getResponseCode());
+        JsonObject resp = readResponse(conn);
+        assertTrue("expected a JSON-RPC error envelope",
+                resp.has("error"));
+        JsonObject err = resp.getAsJsonObject("error");
+        assertTrue(err.get("message").getAsString().contains("too large"));
+    }
+
     // --- helpers ---
 
     private JsonObject jsonRpc(String method, int id) {
@@ -534,8 +634,16 @@ public class McpEndpointTest {
     }
 
     private JsonObject readResponse(HttpURLConnection conn) throws IOException {
+        // On 4xx/5xx, getInputStream() throws; read the error stream instead.
+        java.io.InputStream stream;
+        try {
+            stream = conn.getInputStream();
+        } catch (IOException e) {
+            stream = conn.getErrorStream();
+            if (stream == null) throw e;
+        }
         try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+                new InputStreamReader(stream, StandardCharsets.UTF_8))) {
             StringBuilder sb = new StringBuilder();
             String line;
             while ((line = reader.readLine()) != null) {
