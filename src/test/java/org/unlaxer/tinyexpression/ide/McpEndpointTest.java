@@ -452,6 +452,25 @@ public class McpEndpointTest {
         }
     }
 
+    // --- additional boundary coverage ---
+
+    /**
+     * An unknown JSON-RPC method MUST yield a {@code -32601} "Method not
+     * found" error (JSON-RPC 2.0 §5.1), not an internal error and not a
+     * 202. Guards the {@code default} arm of the dispatch switch.
+     */
+    @Test
+    public void testUnknownMethodReturnsMethodNotFound() throws Exception {
+        JsonObject req = jsonRpc("no/such/method", 7);
+        JsonObject resp = mcpPost(req);
+
+        assertTrue("expected an error envelope", resp.has("error"));
+        JsonObject err = resp.getAsJsonObject("error");
+        assertEquals(-32601, err.get("code").getAsInt());
+        assertTrue(err.get("message").getAsString().contains("Method not found"));
+        assertEquals(7, resp.get("id").getAsInt());
+    }
+
     // --- helpers ---
 
     private JsonObject jsonRpc(String method, int id) {
