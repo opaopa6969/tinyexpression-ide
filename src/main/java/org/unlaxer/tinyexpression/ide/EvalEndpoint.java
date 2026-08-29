@@ -57,6 +57,10 @@ public class EvalEndpoint extends HttpServlet {
     private static final int EVAL_POOL_SIZE = 8;
     private static final int EVAL_QUEUE_CAPACITY = 64;
 
+    /** Maximum accepted request body size in bytes. Larger bodies are rejected
+     *  with 413 before being fully buffered, to prevent unbounded memory use. */
+    static final int MAX_BODY_BYTES = 1024 * 1024;
+
     /** Comma-separated allowed CORS origins via env TINYEXP_ALLOWED_ORIGINS.
      *  Empty/unset → "*" (backward-compatible; intended for local same-origin IDE). */
     private static final java.util.Set<String> ALLOWED_ORIGINS = parseAllowedOrigins(
@@ -90,22 +94,19 @@ public class EvalEndpoint extends HttpServlet {
         resp.setContentType("application/json; charset=UTF-8");
         resp.setHeader("Access-Control-Allow-Origin", corsHeaderFor(req.getHeader("Origin")));
 
-        // Read request body preserving newlines (readLine() strips line endings)
-        StringBuilder body = new StringBuilder();
-        try (BufferedReader reader = req.getReader()) {
-            String line;
-            boolean first = true;
-            while ((line = reader.readLine()) != null) {
-                if (!first) body.append('\n');
-                body.append(line);
-                first = false;
-            }
-        }
-
         JsonObject result = new JsonObject();
 
+        String body;
         try {
-            JsonObject request = GSON.fromJson(body.toString(), JsonObject.class);
+            body = readBody(req);
+        } catch (RequestBodyTooLargeException e) {
+            result.addProperty("error", "Request body too large (max " + MAX_BODY_BYTES + " bytes)");
+            writeJson(resp, 413, result);
+            return;
+        }
+
+        try {
+            JsonObject request = GSON.fromJson(body, JsonObject.class);
             String formula = getStringOrNull(request, "formula");
             if (formula == null || formula.isBlank()) {
                 result.addProperty("error", "Missing 'formula' field");
@@ -216,5 +217,31 @@ public class EvalEndpoint extends HttpServlet {
             out.print(GSON.toJson(json));
             out.flush();
         }
+    }
+
+    /** Read the request body preserving newlines (readLine() strips line
+     *  endings). Rejects bodies larger than {@link #MAX_BODY_BYTES} before
+     *  buffering them fully, throwing {@link RequestBodyTooLargeException}
+     *  which the caller maps to a 413 response. */
+    private static String readBody(HttpServletRequest req) throws IOException, RequestBodyTooLargeException {
+        StringBuilder body = new StringBuilder();
+        int bytes = 0;
+        try (BufferedReader reader = req.getReader()) {
+            String line;
+            boolean first = true;
+            while ((line = reader.readLine()) != null) {
+                if (!first) {
+                    body.append('\n');
+                    bytes++;
+                }
+                bytes += line.length();
+                if (bytes > MAX_BODY_BYTES) {
+                    throw new RequestBodyTooLargeException();
+                }
+                body.append(line);
+                first = false;
+            }
+        }
+        return body.toString();
     }
 }
