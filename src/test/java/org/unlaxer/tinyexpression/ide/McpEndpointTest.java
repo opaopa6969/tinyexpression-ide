@@ -292,6 +292,166 @@ public class McpEndpointTest {
         assertEquals("5", resp.get("result").getAsString());
     }
 
+    // --- regressions for [glm-hunt] issues #2 / #3 / #4 ---
+
+    /**
+     * #2: Variable values containing $var tokens must be treated as literals
+     * and not re-substituted in a later pass. With x="$y", y="5" the formula
+     * "$x + $y" should become "$y + 5" (not "5 + 5"), and evaluating that
+     * should fail because $y is left unresolved.
+     */
+    @Test
+    public void testEvaluateNoDoubleSubstitutionApi() throws Exception {
+        JsonObject body = new JsonObject();
+        body.addProperty("formula", "$x + $y");
+        JsonObject vars = new JsonObject();
+        vars.addProperty("x", "$y");
+        vars.addProperty("y", "5");
+        body.add("variables", vars);
+        body.addProperty("resultType", "number");
+
+        HttpURLConnection conn = (HttpURLConnection) new URL(baseUrl + "/api/eval").openConnection();
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setDoOutput(true);
+        try (OutputStream os = conn.getOutputStream()) {
+            os.write(GSON.toJson(body).getBytes(StandardCharsets.UTF_8));
+        }
+        assertEquals(200, conn.getResponseCode());
+        JsonObject resp = readResponse(conn);
+        // Value of $x ("$y") must NOT be re-substituted to "5"; $y is left as a literal.
+        assertEquals("$y + 5", resp.get("substituted").getAsString());
+        // The resulting formula should not evaluate cleanly.
+        assertNotNull(resp.get("error"));
+        assertFalse(resp.get("error").isJsonNull());
+    }
+
+    @Test
+    public void testEvaluateNoDoubleSubstitutionMcp() throws Exception {
+        JsonObject args = new JsonObject();
+        args.addProperty("formula", "$x + $y");
+        JsonObject vars = new JsonObject();
+        vars.addProperty("x", "$y");
+        vars.addProperty("y", "5");
+        args.add("variables", vars);
+
+        JsonObject resp = callTool("evaluate", args);
+        JsonObject data = readToolContent(resp);
+        assertEquals("$y + 5", data.get("substituted").getAsString());
+        assertNotNull(data.get("error"));
+        assertFalse(data.get("error").isJsonNull());
+    }
+
+    /**
+     * #2 (positive): a value containing a literal '$' that does not form a
+     * known variable must be preserved verbatim (e.g. currency "$100").
+     */
+    @Test
+    public void testEvaluateValueWithDollarLiteralPreserved() throws Exception {
+        JsonObject args = new JsonObject();
+        args.addProperty("formula", "$x + 1");
+        JsonObject vars = new JsonObject();
+        vars.addProperty("x", "$100");
+        args.add("variables", vars);
+
+        JsonObject resp = callTool("evaluate", args);
+        JsonObject data = readToolContent(resp);
+        assertEquals("$100 + 1", data.get("substituted").getAsString());
+    }
+
+    /**
+     * #3: initialize MUST return the generated session id via the
+     * mcp-session-id response header (MCP Streamable HTTP).
+     */
+    @Test
+    public void testInitializeReturnsMcpSessionIdHeader() throws Exception {
+        JsonObject req = jsonRpc("initialize", 1);
+        HttpURLConnection conn = postMcp(req);
+        assertEquals(200, conn.getResponseCode());
+        String sessionId = conn.getHeaderField("mcp-session-id");
+        assertNotNull("mcp-session-id header must be present on initialize", sessionId);
+        assertTrue("mcp-session-id must be a non-empty UUID-like value",
+                sessionId.matches("[0-9a-fA-F-]{36}"));
+    }
+
+    /**
+     * #3 (companion): the session id returned by initialize must be usable
+     * to delete the session via DELETE /mcp.
+     */
+    @Test
+    public void testDeleteSessionByMcpSessionIdHeader() throws Exception {
+        JsonObject initReq = jsonRpc("initialize", 1);
+        HttpURLConnection initConn = postMcp(initReq);
+        String sessionId = initConn.getHeaderField("mcp-session-id");
+        assertNotNull(sessionId);
+
+        HttpURLConnection del = (HttpURLConnection) new URL(baseUrl + "/mcp").openConnection();
+        del.setRequestMethod("DELETE");
+        del.setRequestProperty("mcp-session-id", sessionId);
+        assertEquals(204, del.getResponseCode());
+    }
+
+    /**
+     * #4: a request with id: null (a valid diagnostic id per JSON-RPC 2.0
+     * §4.2) MUST produce a response whose "id" member is present and null.
+     * The default Gson (serializeNulls=false) strips it; we now serialize
+     * envelopes with serializeNulls=true.
+     */
+    @Test
+    public void testResponseIdNullIsPreserved() throws Exception {
+        // Send the raw JSON bytes so that "id": null is actually transmitted.
+        // (Gson with serializeNulls=false would strip it from the request too.)
+        String body = "{\"jsonrpc\":\"2.0\",\"id\":null,\"method\":\"tools/call\","
+                + "\"params\":{\"name\":\"evaluate\",\"arguments\":{\"formula\":\"1 + 2\"}}}";
+
+        HttpURLConnection conn = (HttpURLConnection) new URL(baseUrl + "/mcp").openConnection();
+        conn.setRequestMethod("POST");
+        conn.setRequestProperty("Content-Type", "application/json");
+        conn.setDoOutput(true);
+        try (OutputStream os = conn.getOutputStream()) {
+            os.write(body.getBytes(StandardCharsets.UTF_8));
+        }
+        assertEquals(200, conn.getResponseCode());
+        // Read the raw body so we can assert the serialized form, not just the
+        // parsed element (Gson would happily report JsonNull either way).
+        String rawBody;
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (sb.length() > 0) sb.append('\n');
+                sb.append(line);
+            }
+            rawBody = sb.toString();
+        }
+        assertTrue("raw response must contain \"id\":null — was: " + rawBody,
+                rawBody.contains("\"id\":null"));
+        JsonObject resp = GSON.fromJson(rawBody, JsonObject.class);
+        assertTrue(resp.has("id"));
+        assertTrue(resp.get("id").isJsonNull());
+    }
+
+    /**
+     * #4 (companion): a notification (no id key at all) for
+     * notifications/initialized must still return 202 with no body.
+     */
+    @Test
+    public void testNotificationReturns202() throws Exception {
+        JsonObject req = new JsonObject();
+        req.addProperty("jsonrpc", "2.0");
+        req.addProperty("method", "notifications/initialized");
+        // intentionally no "id"
+
+        HttpURLConnection conn = postMcp(req);
+        assertEquals(202, conn.getResponseCode());
+        // No JSON body expected for a notification.
+        try (BufferedReader reader = new BufferedReader(
+                new InputStreamReader(conn.getInputStream(), StandardCharsets.UTF_8))) {
+            assertFalse(reader.ready());
+        }
+    }
+
     // --- helpers ---
 
     private JsonObject jsonRpc(String method, int id) {
