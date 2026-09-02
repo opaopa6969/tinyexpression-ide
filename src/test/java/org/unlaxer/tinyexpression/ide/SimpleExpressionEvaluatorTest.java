@@ -52,4 +52,16 @@ public class SimpleExpressionEvaluatorTest {
                 fractional instanceof BigDecimal);
         assertEquals(new BigDecimal("2.5"), fractional);
     }
+
+    @Test
+    public void testRejectsExcessiveParenthesisNesting() {
+        String expression = "(".repeat(SimpleExpressionEvaluator.MAX_NESTING_DEPTH + 1)
+                + "1" + ")".repeat(SimpleExpressionEvaluator.MAX_NESTING_DEPTH + 1);
+        try {
+            SimpleExpressionEvaluator.evaluate(expression);
+            fail("expected IllegalArgumentException for excessive nesting");
+        } catch (IllegalArgumentException e) {
+            assertTrue(e.getMessage().contains("nesting depth"));
+        }
+    }
 }
