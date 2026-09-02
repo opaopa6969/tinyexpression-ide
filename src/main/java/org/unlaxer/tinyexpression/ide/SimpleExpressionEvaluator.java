@@ -22,6 +22,8 @@ import java.math.RoundingMode;
  */
 public final class SimpleExpressionEvaluator {
 
+    static final int MAX_NESTING_DEPTH = 1000;
+
     private SimpleExpressionEvaluator() {}
 
     public static Object evaluate(String expression) {
@@ -48,6 +50,7 @@ public final class SimpleExpressionEvaluator {
     private static class Parser {
         final String input;
         int pos;
+        int nestingDepth;
 
         Parser(String input) {
             this.input = input;
@@ -97,11 +100,14 @@ public final class SimpleExpressionEvaluator {
 
         BigDecimal parseUnary() {
             skipWhitespace();
-            if (pos < input.length() && input.charAt(pos) == '-') {
+            int negations = 0;
+            while (pos < input.length() && input.charAt(pos) == '-') {
                 pos++;
-                return parseUnary().negate();
+                negations++;
+                skipWhitespace();
             }
-            return parsePrimary();
+            BigDecimal result = parsePrimary();
+            return (negations % 2 == 0) ? result : result.negate();
         }
 
         BigDecimal parsePrimary() {
@@ -114,14 +120,23 @@ public final class SimpleExpressionEvaluator {
 
             // Parenthesized expression
             if (c == '(') {
-                pos++;
-                BigDecimal result = parseExpression();
-                skipWhitespace();
-                if (pos >= input.length() || input.charAt(pos) != ')') {
-                    throw new IllegalArgumentException("Missing closing parenthesis");
+                if (++nestingDepth > MAX_NESTING_DEPTH) {
+                    nestingDepth--;
+                    throw new IllegalArgumentException(
+                            "Expression nesting depth exceeds maximum of " + MAX_NESTING_DEPTH);
                 }
                 pos++;
-                return result;
+                try {
+                    BigDecimal result = parseExpression();
+                    skipWhitespace();
+                    if (pos >= input.length() || input.charAt(pos) != ')') {
+                        throw new IllegalArgumentException("Missing closing parenthesis");
+                    }
+                    pos++;
+                    return result;
+                } finally {
+                    nestingDepth--;
+                }
             }
 
             // Number
