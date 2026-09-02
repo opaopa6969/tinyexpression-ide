@@ -9,6 +9,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -44,11 +47,33 @@ public class McpEndpoint extends HttpServlet {
     /** Maximum accepted request body size in bytes. Larger bodies are rejected
      *  with 413 before being fully buffered, to prevent unbounded memory use. */
     static final int MAX_BODY_BYTES = 1024 * 1024;
+    /** Sessions are kept while active, but abandoned sessions must not grow forever. */
+    static final long SESSION_TTL_MILLIS = TimeUnit.MINUTES.toMillis(30);
+    private static final long SESSION_CLEANUP_INTERVAL_MILLIS = TimeUnit.MINUTES.toMillis(1);
 
-    private final ConcurrentHashMap<String, Boolean> sessions = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Long> sessions = new ConcurrentHashMap<>();
+    private final ScheduledExecutorService sessionCleanup = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread thread = new Thread(r, "mcp-session-cleanup");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    @Override
+    public void init() {
+        sessionCleanup.scheduleAtFixedRate(this::removeExpiredSessions,
+                SESSION_CLEANUP_INTERVAL_MILLIS, SESSION_CLEANUP_INTERVAL_MILLIS, TimeUnit.MILLISECONDS);
+    }
+
+    @Override
+    public void destroy() {
+        sessionCleanup.shutdownNow();
+        sessions.clear();
+    }
 
     @Override
     protected void doPost(HttpServletRequest req, HttpServletResponse resp) throws IOException {
+        removeExpiredSessions();
+        touchSession(req.getHeader("mcp-session-id"));
         resp.setContentType("application/json; charset=UTF-8");
         resp.setHeader("Content-Encoding", "identity");
 
@@ -137,6 +162,7 @@ public class McpEndpoint extends HttpServlet {
 
     @Override
     protected void doDelete(HttpServletRequest req, HttpServletResponse resp) {
+        removeExpiredSessions();
         String sessionId = req.getHeader("mcp-session-id");
         if (sessionId != null) {
             sessions.remove(sessionId);
@@ -148,7 +174,7 @@ public class McpEndpoint extends HttpServlet {
 
     private JsonObject handleInitialize(HttpServletRequest req, HttpServletResponse resp, JsonObject request) {
         String sessionId = UUID.randomUUID().toString();
-        sessions.put(sessionId, true);
+        sessions.put(sessionId, System.currentTimeMillis() + SESSION_TTL_MILLIS);
         // MCP Streamable HTTP: the server MUST return the session id via the
         // mcp-session-id response header so the client can echo it on subsequent
         // requests (and use it for DELETE to tear down the session).
@@ -171,6 +197,18 @@ public class McpEndpoint extends HttpServlet {
         result.add("result", inner);
 
         return result;
+    }
+
+    private void touchSession(String sessionId) {
+        if (sessionId != null) {
+            sessions.computeIfPresent(sessionId,
+                    (ignored, ignoredExpiry) -> System.currentTimeMillis() + SESSION_TTL_MILLIS);
+        }
+    }
+
+    private void removeExpiredSessions() {
+        long now = System.currentTimeMillis();
+        sessions.entrySet().removeIf(entry -> entry.getValue() <= now);
     }
 
     private JsonObject handleToolsList() {
